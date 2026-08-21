@@ -1,0 +1,394 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------- palette
+   Semantic tokens, not colour names. Every surface, line and text weight is
+   named for its job, so light and dark are two value sets rather than two
+   stylesheets — and a component never has to know which theme is active.
+
+   Density is deliberate: this is a working tool used all day on ordinary
+   laptop screens, and rows-per-screen is a feature. The polish is in
+   typography, contrast and motion, not in whitespace.                      */
+
+:root {
+  --bg: #f4f2ef;
+  --surface: #ffffff;
+  --surface-2: #faf9f7;
+  --surface-3: #efece7;
+  --line: #e3ded7;
+  --line-soft: #efebe5;
+
+  --fg: #1a1714;
+  --fg-2: #45403b;
+  --fg-3: #6f6863;
+  --fg-4: #9a938c;
+  --fg-5: #c2bbb3;
+
+  --accent: #0f5c4a;
+  --accent-hover: #16785f;
+  --accent-soft: #e4f0ec;
+  --accent-fg: #ffffff;
+
+  --gold: #8a6a1f;
+  --gold-soft: #f8f1df;
+  --danger: #9f1e28;
+  --danger-soft: #fceeee;
+  --warn: #8a5a12;
+  --warn-soft: #fdf3e3;
+  --info: #1c4f7c;
+  --info-soft: #eaf2fa;
+
+  --shadow-card: 0 1px 2px rgba(26, 23, 20, 0.05);
+  --shadow-pop: 0 12px 32px -8px rgba(26, 23, 20, 0.22);
+}
+
+:root[data-theme="dark"] {
+  --bg: #14100e;
+  --surface: #1c1815;
+  --surface-2: #221d1a;
+  --surface-3: #2b2521;
+  --line: #322b26;
+  --line-soft: #262019;
+
+  --fg: #f4f0eb;
+  --fg-2: #d3ccc4;
+  --fg-3: #a29a91;
+  --fg-4: #7c746c;
+  --fg-5: #574f49;
+
+  --accent: #3fbb95;
+  --accent-hover: #57cfa9;
+  --accent-soft: #15302a;
+  --accent-fg: #06231b;
+
+  --gold: #d6a94e;
+  --gold-soft: #2d2415;
+  --danger: #f08a8a;
+  --danger-soft: #33191a;
+  --warn: #e0a95c;
+  --warn-soft: #302311;
+  --info: #7cb3e0;
+  --info-soft: #16242f;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 12px 32px -8px rgba(0, 0, 0, 0.6);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-fg-4: var(--fg-4);
+  --color-fg-5: var(--fg-5);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+
+  --font-sans: "Inter var", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ------------------------------------------------------------------ base */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg-2);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Figures are read down a column; they must not jitter as digits change. */
+.tnum {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  /* A wrapped figure ("LKR" above "405.6K") is unreadable in a column and
+     inflates the row height of every neighbour. Numbers never wrap. */
+  white-space: nowrap;
+}
+
+/* Data entry is keyboard-heavy, so focus must always be obvious. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--fg-5);
+  border-radius: 6px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-4);
+}
+
+/* --------------------------------------------------------------- motion */
+
+@media (prefers-reduced-motion: no-preference) {
+  .anim-in {
+    animation: fade-up 0.18s ease-out both;
+  }
+  .anim-pop {
+    animation: pop-in 0.14s ease-out both;
+  }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Skeleton placeholder used by the route-level loading states. */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-3);
+  border-radius: 4px;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--surface) 55%, transparent),
+    transparent
+  );
+  animation: shimmer 1.4s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after { animation: none; }
+}
+
+/* ------------------------------------------------------------- sidebar
+   Collapse state lives on <html>, set by the same pre-paint script that sets
+   the theme. Driving it from CSS rather than React state means no flash of
+   the wrong width on load, and no state to synchronise after hydration.     */
+
+.app-sidebar { width: 13rem; }
+html[data-sidebar="collapsed"] .app-sidebar { width: 3.5rem; }
+@media (prefers-reduced-motion: no-preference) {
+  .app-sidebar { transition: width 0.15s ease; }
+}
+html[data-sidebar="collapsed"] .sidebar-wide { display: none; }
+html:not([data-sidebar="collapsed"]) .sidebar-narrow { display: none; }
+html[data-sidebar="collapsed"] .sidebar-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* ------------------------------------------------------------------ print
+   Printed output is a working document — a stock-take sheet carried to the
+   safe, or a custody list handed to an auditor. It drops the navigation and
+   controls, forces light ink on white paper regardless of the screen theme,
+   and repeats table headers across pages.                                  */
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 12mm 10mm;
+  }
+
+  :root,
+  :root[data-theme="dark"] {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f4f4f4;
+    --surface-3: #ececec;
+    --line: #c9c9c9;
+    --line-soft: #e0e0e0;
+    --fg: #000000;
+    --fg-2: #1a1a1a;
+    --fg-3: #444444;
+    --fg-4: #666666;
+    --fg-5: #999999;
+    --accent: #0f5c4a;
+    --accent-soft: #eef5f2;
+    --warn-soft: #fbf3e6;
+    --danger-soft: #fbeeee;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    font-size: 9.5pt;
+  }
+
+  .app-sidebar,
+  .print\:hidden,
+  nav,
+  button,
+  input,
+  select {
+    display: none !important;
+  }
+
+  main {
+    padding: 0 !important;
+  }
+
+  /* Cards become plain ruled blocks; shadows and radii waste toner. */
+  [class*="rounded-lg"],
+  [class*="rounded-xl"] {
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  table {
+    width: 100% !important;
+    min-width: 0 !important;
+    border-collapse: collapse;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tr {
+    break-inside: avoid;
+  }
+  th {
+    border-bottom: 1px solid #999 !important;
+  }
+
+  /* Wide tables scroll on screen; on paper they must simply fit. */
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  /* Screen layouts put content in narrow grid columns beside a sidebar panel.
+     On paper there is no sidebar, so a voucher or register should use the full
+     width of the sheet. The label sheet keeps its own grid. */
+  main .grid {
+    display: block !important;
+  }
+  main .grid > * {
+    width: 100% !important;
+    margin-bottom: 4mm;
+  }
+
+  a[href]::after {
+    content: "";
+  }
+
+  .print-only {
+    display: block !important;
+  }
+}
+
+.print-only {
+  display: none;
+}
+
+/* ------------------------------------------------------------- QR labels
+   Sized for a stone packet — the paper envelope the stone actually lives in.
+   Three across on A4 portrait, with a cut border rather than a card.        */
+
+.labels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 6px;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 7px;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+  break-inside: avoid;
+}
+
+.label-qr svg {
+  display: block;
+  width: 46px;
+  height: 46px;
+}
+
+.label-text {
+  min-width: 0;
+  line-height: 1.25;
+}
+.label-no {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+.label-line {
+  font-size: 8.5px;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.label-strong {
+  color: var(--fg-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.label-faint { color: var(--fg-4); }
+
+@media print {
+  @page { size: A4 portrait; margin: 8mm; }
+  .labels-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 3mm;
+  }
+  .label {
+    border: 1px dashed #999;
+    background: #fff;
+  }
+  .label-qr svg { width: 15mm; height: 15mm; }
+}

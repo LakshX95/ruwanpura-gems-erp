@@ -1,0 +1,23 @@
+# Local development database. Production uses the same image on the VPS,
+# behind Caddy, with a mounted volume and daily pg_dump to object storage.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: gemstock-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gemstock
+      POSTGRES_PASSWORD: gemstock_dev
+      POSTGRES_DB: gemstock
+    ports:
+      - "55432:5432"
+    volumes:
+      - gemstock-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gemstock -d gemstock"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  gemstock-pgdata:

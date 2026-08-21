@@ -1,0 +1,554 @@
+// Gem Stock & Costing System — Phase 1 schema.
+//
+// Two patterns here look like over-engineering and are not. Both are cheap now
+// and are rewrites later:
+//
+//   1. Transformation / TransformationLine, not a parentId on Stone. A parcel
+//      splitting into forty stones is one->many; a matched pair is many->one.
+//      A parent pointer cannot express the second, and the trade needs both.
+//   2. CostEntry as a ledger, not a `cost` column on Stone. Cost accrues from
+//      purchase, cutting, heating and lab work, and the owner wants the
+//      breakdown — which is the feature that wins the demo.
+//
+// Money is BigInt minor units (cents) with an explicit currency. Never Float.
+// Weights are Decimal(12,3) carats. Never Float — a rounding error in a stock
+// reconciliation looks like theft.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Connection URL lives in prisma.config.ts (Prisma 7 moved it out of the schema).
+
+enum Role {
+  OWNER // sees everything, including cost and margin
+  MANAGER // operations; sees cost, not full financials
+  CLERK // data entry; cost and margin hidden entirely
+}
+
+enum StoneKind {
+  LOT // a bought parcel, before sorting
+  STONE // an individual stone — quantity is always 1
+  PARCEL // bulk goods tracked by weight and piece count (melee)
+}
+
+enum StoneStatus {
+  IN_STOCK
+  OUT // with a cutter, heater, lab, or buyer on memo
+  SOLD
+  WRITTEN_OFF
+  /// Transformed into children by a split or merge. Not a loss: its cost has
+  /// been allocated onto its descendants, so valuation must exclude it or the
+  /// same money is counted twice.
+  CONSUMED
+}
+
+enum CostKind {
+  PURCHASE
+  ALLOCATION // share of a parent lot's cost, pushed down on a split
+  CUTTING
+  HEATING
+  LAB
+  FREIGHT
+  BROKERAGE
+  OTHER
+}
+
+enum TransformKind {
+  SPLIT
+  MERGE
+  RECUT
+}
+
+enum CustodyReason {
+  RECEIPT
+  INTERNAL_MOVE
+  CUTTING
+  HEATING
+  LAB
+  MEMO
+  SHOW
+  RETURN
+  SALE
+}
+
+model AppUser {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String
+  passwordHash String   @map("password_hash")
+  role         Role     @default(CLERK)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  stonesCreated Stone[]        @relation("StoneCreatedBy")
+  custodyEvents CustodyEvent[]
+  auditLogs     AuditLog[]
+  jobs          Job[]
+  sales         Sale[]
+  memos         Memo[]
+
+  @@map("app_user")
+}
+
+/// Suppliers, cutters, heaters, labs and customers. One person is often
+/// several of these, so they are flags rather than separate tables.
+model Party {
+  id         String  @id @default(uuid()) @db.Uuid
+  name       String
+  phone      String?
+  note       String?
+  isSupplier Boolean @default(false) @map("is_supplier")
+  isVendor   Boolean @default(false) @map("is_vendor") // cutter, heater, lab
+  isCustomer Boolean @default(false) @map("is_customer")
+  isActive   Boolean @default(true) @map("is_active")
+
+  purchases     Purchase[]
+  heldStones    Stone[]        @relation("StoneHeldBy")
+  custodyEvents CustodyEvent[]
+  jobs          Job[]
+  sales         Sale[]         @relation("SaleCustomer")
+  memos         Memo[]         @relation("MemoParty")
+
+  @@index([name])
+  @@map("party")
+}
+
+/// Hierarchical: branch -> safe -> tray -> box.
+model Location {
+  id       String     @id @default(uuid()) @db.Uuid
+  name     String
+  parentId String?    @map("parent_id") @db.Uuid
+  parent   Location?  @relation("LocationTree", fields: [parentId], references: [id])
+  children Location[] @relation("LocationTree")
+
+  stones        Stone[]
+  custodyEvents CustodyEvent[]
+
+  @@map("location")
+}
+
+model RefVariety {
+  id      String  @id @default(uuid()) @db.Uuid
+  name    String  @unique // Blue Sapphire, Padparadscha, Cat's Eye Chrysoberyl
+  species String? // Corundum, Chrysoberyl, Spinel
+  sortKey Int     @default(0) @map("sort_key")
+  stones  Stone[]
+
+  @@map("ref_variety")
+}
+
+model RefShape {
+  id      String  @id @default(uuid()) @db.Uuid
+  name    String  @unique // Oval, Cushion, Round, Cabochon
+  sortKey Int     @default(0) @map("sort_key")
+  stones  Stone[]
+
+  @@map("ref_shape")
+}
+
+model RefColour {
+  id      String  @id @default(uuid()) @db.Uuid
+  name    String  @unique // Royal Blue, Cornflower, Pink-Orange
+  sortKey Int     @default(0) @map("sort_key")
+  stones  Stone[]
+
+  @@map("ref_colour")
+}
+
+/// Treatment is not a boolean. "Unheated" versus "heated" versus "diffusion"
+/// is a very large commercial difference, and it must be disclosed on sale.
+model RefTreatment {
+  id         String  @id @default(uuid()) @db.Uuid
+  name       String  @unique // None (Unheated), Heated, Diffusion, Fissure-filled
+  disclosure String? // wording printed on customer documents
+  sortKey    Int     @default(0) @map("sort_key")
+  stones     Stone[]
+
+  @@map("ref_treatment")
+}
+
+/// The central record. A row is a lot, an individual stone, or a bulk parcel.
+model Stone {
+  id      String      @id @default(uuid()) @db.Uuid
+  stoneNo String      @unique @map("stone_no") // BS-2026-0417
+  kind    StoneKind   @default(STONE)
+  status  StoneStatus @default(IN_STOCK)
+
+  weightCt    Decimal       @map("weight_ct") @db.Decimal(12, 3)
+  pieceCount  Int           @default(1) @map("piece_count") // > 1 only for PARCEL
+  varietyId   String?       @map("variety_id") @db.Uuid
+  shapeId     String?       @map("shape_id") @db.Uuid
+  colourId    String?       @map("colour_id") @db.Uuid
+  treatmentId String?       @map("treatment_id") @db.Uuid
+  variety     RefVariety?   @relation(fields: [varietyId], references: [id])
+  shape       RefShape?     @relation(fields: [shapeId], references: [id])
+  colour      RefColour?    @relation(fields: [colourId], references: [id])
+  treatment   RefTreatment? @relation(fields: [treatmentId], references: [id])
+
+  clarity  String?
+  lengthMm Decimal? @map("length_mm") @db.Decimal(8, 2)
+  widthMm  Decimal? @map("width_mm") @db.Decimal(8, 2)
+  depthMm  Decimal? @map("depth_mm") @db.Decimal(8, 2)
+  origin   String?
+  certLab  String?  @map("cert_lab")
+  certNo   String?  @map("cert_no")
+
+  // Where it is, and who is holding it — two different things. A stone at a
+  // cutter is still owned by the business and still on its balance sheet.
+  locationId String?   @map("location_id") @db.Uuid
+  location   Location? @relation(fields: [locationId], references: [id])
+  heldById   String?   @map("held_by_id") @db.Uuid
+  heldBy     Party?    @relation("StoneHeldBy", fields: [heldById], references: [id])
+
+  askingPriceMinor BigInt? @map("asking_price_minor")
+  currency         String  @default("LKR") @db.Char(3)
+
+  purchaseId String?   @map("purchase_id") @db.Uuid
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id])
+
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String   @map("created_by_id") @db.Uuid
+  createdBy   AppUser  @relation("StoneCreatedBy", fields: [createdById], references: [id])
+
+  costEntries    CostEntry[]
+  custodyEvents  CustodyEvent[]
+  media          Media[]
+  transformLines TransformationLine[]
+  jobLines       JobLine[]
+  saleLines      SaleLine[]
+  memoLines      MemoLine[]
+
+  @@index([status])
+  @@index([varietyId])
+  @@index([locationId])
+  @@index([heldById])
+  @@index([createdAt])
+  @@map("stone")
+}
+
+/// Cost accrues. Landed cost = SUM(baseMinor). Never a single column.
+model CostEntry {
+  id      String   @id @default(uuid()) @db.Uuid
+  stoneId String   @map("stone_id") @db.Uuid
+  stone   Stone    @relation(fields: [stoneId], references: [id], onDelete: Cascade)
+  kind    CostKind
+
+  amountMinor BigInt  @map("amount_minor") // as incurred, in `currency`
+  currency    String  @default("LKR") @db.Char(3)
+  fxRate      Decimal @default(1) @map("fx_rate") @db.Decimal(18, 8)
+  // The converted figure is stored, not recomputed later. Recomputing historical
+  // conversions gives different answers and destroys trust in the reports.
+  baseMinor   BigInt  @map("base_minor")
+
+  incurredOn DateTime @map("incurred_on") @db.Date
+  sourceDoc  String?  @map("source_doc")
+  note       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([stoneId, incurredOn])
+  @@map("cost_entry")
+}
+
+/// A split, merge or recut. Input and output lines rather than a parent
+/// pointer, so many->one works as well as one->many.
+model Transformation {
+  id              String        @id @default(uuid()) @db.Uuid
+  kind            TransformKind
+  occurredAt      DateTime      @default(now()) @map("occurred_at")
+  /// Weight destroyed in the process. Invariant, enforced in the service layer:
+  ///   sum(input weight) == sum(output weight) + lossCt
+  lossCt          Decimal       @default(0) @map("loss_ct") @db.Decimal(12, 3)
+  /// by_weight | by_value | manual — recorded because it is a real business
+  /// decision with profitability consequences, and firms differ.
+  costAllocMethod String        @default("by_weight") @map("cost_alloc_method")
+  note            String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  lines TransformationLine[]
+
+  @@map("transformation")
+}
+
+model TransformationLine {
+  id               String         @id @default(uuid()) @db.Uuid
+  transformationId String         @map("transformation_id") @db.Uuid
+  transformation   Transformation @relation(fields: [transformationId], references: [id], onDelete: Cascade)
+  direction        String // 'input' | 'output'
+  stoneId          String         @map("stone_id") @db.Uuid
+  stone            Stone          @relation(fields: [stoneId], references: [id])
+  weightCt         Decimal        @map("weight_ct") @db.Decimal(12, 3)
+  costShareMinor   BigInt?        @map("cost_share_minor")
+
+  @@unique([transformationId, direction, stoneId])
+  @@index([stoneId])
+  @@map("transformation_line")
+}
+
+/// Every physical movement. This is the record that settles disputes.
+model CustodyEvent {
+  id         String        @id @default(uuid()) @db.Uuid
+  stoneId    String        @map("stone_id") @db.Uuid
+  stone      Stone         @relation(fields: [stoneId], references: [id], onDelete: Cascade)
+  occurredAt DateTime      @default(now()) @map("occurred_at")
+  reason     CustodyReason
+
+  toPartyId    String?   @map("to_party_id") @db.Uuid
+  toParty      Party?    @relation(fields: [toPartyId], references: [id])
+  toLocationId String?   @map("to_location_id") @db.Uuid
+  toLocation   Location? @relation(fields: [toLocationId], references: [id])
+
+  /// Weight verified at handover. Compared against the weight on return.
+  weightCt     Decimal   @map("weight_ct") @db.Decimal(12, 3)
+  expectedBack DateTime? @map("expected_back") @db.Date
+  voucherNo    String?   @map("voucher_no")
+  note         String?
+
+  createdById String  @map("created_by_id") @db.Uuid
+  createdBy   AppUser @relation(fields: [createdById], references: [id])
+
+  @@index([stoneId, occurredAt])
+  @@map("custody_event")
+}
+
+model Media {
+  id        String   @id @default(uuid()) @db.Uuid
+  stoneId   String   @map("stone_id") @db.Uuid
+  stone     Stone    @relation(fields: [stoneId], references: [id], onDelete: Cascade)
+  url       String
+  thumbUrl  String?  @map("thumb_url")
+  isMain    Boolean  @default(false) @map("is_main")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([stoneId])
+  @@map("media")
+}
+
+model Purchase {
+  id          String   @id @default(uuid()) @db.Uuid
+  purchaseNo  String   @unique @map("purchase_no")
+  supplierId  String   @map("supplier_id") @db.Uuid
+  supplier    Party    @relation(fields: [supplierId], references: [id])
+  purchasedOn DateTime @map("purchased_on") @db.Date
+  description String?
+  weightCt    Decimal  @map("weight_ct") @db.Decimal(12, 3)
+  totalMinor  BigInt   @map("total_minor")
+  currency    String   @default("LKR") @db.Char(3)
+  brokerName  String?  @map("broker_name")
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  stones Stone[]
+
+  @@index([purchasedOn])
+  @@map("purchase")
+}
+
+/// Who changed what, when. In a business holding high-value portable assets,
+/// being able to prove a record was not quietly altered is a feature.
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  tableName String   @map("table_name")
+  rowId     String   @map("row_id")
+  action    String // create | update | delete
+  changes   Json?
+  actorId   String?  @map("actor_id") @db.Uuid
+  actor     AppUser? @relation(fields: [actorId], references: [id])
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([tableName, rowId])
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+/// Sending stones out to a cutter, a heater or a laboratory, and recording
+/// what comes back.
+///
+/// Deliberately NOT modelled as a Transformation: a cutting job returns the
+/// same stone at a lower weight, and a transformation with the same stone as
+/// both input and output would make the ancestry recursion self-referential.
+/// The job line is the record of the weight change; Transformation stays for
+/// genuine one->many splits and many->one merges.
+enum JobKind {
+  CUTTING
+  HEATING
+  LAB
+}
+
+enum JobStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum JobLineOutcome {
+  RETURNED
+  LOST /// destroyed during treatment, or never came back
+  BROKEN /// returned damaged and written off
+  REJECTED /// vendor declined the work; returned unchanged
+}
+
+model Job {
+  id           String    @id @default(uuid()) @db.Uuid
+  jobNo        String    @unique @map("job_no")
+  kind         JobKind
+  status       JobStatus @default(OPEN)
+  vendorId     String    @map("vendor_id") @db.Uuid
+  vendor       Party     @relation(fields: [vendorId], references: [id])
+  issuedOn     DateTime  @map("issued_on") @db.Date
+  expectedBack DateTime? @map("expected_back") @db.Date
+  returnedOn   DateTime? @map("returned_on") @db.Date
+  /// per_stone | per_carat | fixed — recorded because vendors differ
+  chargeBasis  String    @default("per_stone") @map("charge_basis")
+  instructions String?
+  note         String?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  createdById  String    @map("created_by_id") @db.Uuid
+  createdBy    AppUser   @relation(fields: [createdById], references: [id])
+
+  lines JobLine[]
+
+  @@index([status])
+  @@index([vendorId])
+  @@index([issuedOn])
+  @@map("job")
+}
+
+model JobLine {
+  id      String @id @default(uuid()) @db.Uuid
+  jobId   String @map("job_id") @db.Uuid
+  job     Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  stoneId String @map("stone_id") @db.Uuid
+  stone   Stone  @relation(fields: [stoneId], references: [id])
+
+  /// Weight handed over, verified at the counter.
+  weightOutCt Decimal         @map("weight_out_ct") @db.Decimal(12, 3)
+  /// Weight back. Null while the job is open.
+  weightInCt  Decimal?        @map("weight_in_ct") @db.Decimal(12, 3)
+  outcome     JobLineOutcome?
+  chargeMinor BigInt?         @map("charge_minor")
+  note        String?
+
+  @@unique([jobId, stoneId])
+  @@index([stoneId])
+  @@map("job_line")
+}
+
+/// A completed sale. Returns and part-payments are out of scope for now — this
+/// records that goods left, at what price, against what they cost.
+model Sale {
+  id         String   @id @default(uuid()) @db.Uuid
+  saleNo     String   @unique @map("sale_no")
+  customerId String   @map("customer_id") @db.Uuid
+  customer   Party    @relation("SaleCustomer", fields: [customerId], references: [id])
+  soldOn     DateTime @map("sold_on") @db.Date
+  currency   String   @default("LKR") @db.Char(3)
+  /// Rate to the base currency on the day of sale, stored so historical margin
+  /// never changes when the exchange rate moves.
+  fxRate     Decimal  @default(1) @map("fx_rate") @db.Decimal(18, 8)
+  brokerName String?  @map("broker_name")
+  note       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  createdById String  @map("created_by_id") @db.Uuid
+  createdBy   AppUser @relation(fields: [createdById], references: [id])
+
+  lines SaleLine[]
+
+  @@index([soldOn])
+  @@index([customerId])
+  @@map("sale")
+}
+
+model SaleLine {
+  id      String @id @default(uuid()) @db.Uuid
+  saleId  String @map("sale_id") @db.Uuid
+  sale    Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  stoneId String @map("stone_id") @db.Uuid
+  stone   Stone  @relation(fields: [stoneId], references: [id])
+
+  /// Snapshots taken at the moment of sale. Cost keeps accruing on a stone
+  /// through later corrections, and margin recorded last year must not move
+  /// because someone posted a forgotten lab invoice today.
+  weightCt        Decimal @map("weight_ct") @db.Decimal(12, 3)
+  perCaratMinor   BigInt? @map("per_carat_minor")
+  totalMinor      BigInt  @map("total_minor")
+  /// The sale total converted to base currency.
+  baseMinor       BigInt  @map("base_minor")
+  costAtSaleMinor BigInt  @map("cost_at_sale_minor")
+
+  @@unique([saleId, stoneId])
+  @@index([stoneId])
+  @@map("sale_line")
+}
+
+/// Goods handed to a dealer or customer "on approval" — shown to their own
+/// clients before any sale. Ownership never moves; only custody does. This is
+/// routine in the gem trade and it is where stock quietly disappears, so the
+/// paperwork and the aging are the whole point of the module.
+enum MemoStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum MemoLineOutcome {
+  RETURNED
+  SOLD
+  LOST /// never came back and written off
+}
+
+model Memo {
+  id            String     @id @default(uuid()) @db.Uuid
+  memoNo        String     @unique @map("memo_no")
+  status        MemoStatus @default(OPEN)
+  partyId       String     @map("party_id") @db.Uuid
+  party         Party      @relation("MemoParty", fields: [partyId], references: [id])
+  issuedOn      DateTime   @map("issued_on") @db.Date
+  dueBack       DateTime   @map("due_back") @db.Date
+  closedOn      DateTime?  @map("closed_on") @db.Date
+  /// Every extension is appended here rather than overwriting the due date,
+  /// so a repeatedly-extended memo is visible for what it is.
+  extensionNote String?    @map("extension_note")
+  note          String?
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  createdById String  @map("created_by_id") @db.Uuid
+  createdBy   AppUser @relation(fields: [createdById], references: [id])
+
+  lines MemoLine[]
+
+  @@index([status])
+  @@index([partyId])
+  @@index([dueBack])
+  @@map("memo")
+}
+
+model MemoLine {
+  id      String @id @default(uuid()) @db.Uuid
+  memoId  String @map("memo_id") @db.Uuid
+  memo    Memo   @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  stoneId String @map("stone_id") @db.Uuid
+  stone   Stone  @relation(fields: [stoneId], references: [id])
+
+  /// Weight verified at handover, and the price quoted when it went out.
+  weightOutCt      Decimal @map("weight_out_ct") @db.Decimal(12, 3)
+  quotedPriceMinor BigInt? @map("quoted_price_minor")
+
+  outcome   MemoLineOutcome?
+  settledOn DateTime?        @map("settled_on") @db.Date
+  /// Set when the line was settled by selling it.
+  saleId    String?          @map("sale_id") @db.Uuid
+  note      String?
+
+  @@unique([memoId, stoneId])
+  @@index([stoneId])
+  @@map("memo_line")
+}
